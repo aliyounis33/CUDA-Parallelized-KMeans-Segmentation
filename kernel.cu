@@ -69,6 +69,145 @@ void runKMeansPlusPlus(unsigned char* data, int width, int height, int channels,
 // =====================================================================
 // 5. MINI-BATCH K-MEANS 
 // =====================================================================
+__global__ void miniBatchKmeansKernel(
+    unsigned char* image,
+    int* batch_indices,
+    float* centroids,
+    int* centroid_counts,
+    int* labels,
+    int total_pixels,
+    int batch_size,
+    int k, int channels)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid >= batch_size)
+        return;
+
+    int pixel_idx = batch_indices[tid];
+
+    if(pixel_idx >= total_pixels)
+        return;
+
+    int rgbOffset = pixel_idx * channels;
+
+    float r = image[rgbOffset];
+    float g = image[rgbOffset + 1];
+    float b = image[rgbOffset + 2];
+
+    // Find nearest centroid
+
+    float minDist = 1e20;
+    int bestCluster = 0;
+
+    #pragma unroll
+    for(int c = 0; c < k; c++)
+    {
+        float cr = centroids[c * channels];
+        float cg = centroids[c * channels + 1];
+        float cb = centroids[c * channels + 2];
+
+        float dist =
+            (r - cr)*(r - cr) +
+            (g - cg)*(g - cg) +
+            (b - cb)*(b - cb);
+
+        if(dist < minDist)
+        {
+            minDist = dist;
+            bestCluster = c;
+        }
+    }
+
+    // Store temporary batch label
+
+    labels[pixel_idx] = bestCluster;
+
+    // Incremental centroid update (per every assigned pixel)
+
+    int old_count =
+        atomicAdd(&centroid_counts[bestCluster], 1);
+
+    float eta = 1.0f / (old_count + 1);
+
+    atomicAdd(
+        &centroids[bestCluster * channels],
+        eta * (r - centroids[bestCluster * channels]));
+
+    atomicAdd(
+        &centroids[bestCluster * channels + 1],
+        eta * (g - centroids[bestCluster * channels + 1]));
+
+    atomicAdd(
+        &centroids[bestCluster * channels + 2],
+        eta * (b - centroids[bestCluster * channels + 2]));
+}
+
+// Final Full-Image Assignment Kernel
+
+__global__ void finalAssignmentKernel(
+    unsigned char* image,
+    float* centroids,
+    int* labels,
+    int total_pixels,
+    int k, int channels)
+{
+    int idx =
+        blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(idx >= total_pixels)
+        return;
+
+    // Read pixel
+
+    int rgbOffset = idx * channels;
+
+    float r = image[rgbOffset];
+    float g = image[rgbOffset + 1];
+    float b = image[rgbOffset + 2];
+
+    // Find nearest centroid
+
+    float minDist = 1e20;
+    int bestCluster = 0;
+
+    #pragma unroll
+    for(int c = 0; c < k; c++)
+    {
+        float cr = centroids[c * channels];
+        float cg = centroids[c * channels + 1];
+        float cb = centroids[c * channels + 2];
+
+        float dist =
+            (r - cr)*(r - cr) +
+            (g - cg)*(g - cg) +
+            (b - cb)*(b - cb);
+
+        if(dist < minDist)
+        {
+            minDist = dist;
+            bestCluster = c;
+        }
+    }
+
+    // Store final label
+
+    labels[idx] = bestCluster;
+}
+
+// Random mini-batch Sampling
+
+void generateMiniBatch(
+    vector<int>& batch_indices,
+    int total_pixels)
+{
+    for(int i = 0; i < BATCH_SIZE; i++)
+    {
+        batch_indices[i] = rand() % total_pixels;
+    }
+}
+
+
 void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
     if (useGPU) {
     std::cout << "Running Mini-Batch K-Means on GPU..." << std::endl;
@@ -181,7 +320,7 @@ void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels
             d_labels,
             total_pixels,
             BATCH_SIZE,
-            k);
+            k, channels);
 
         cudaDeviceSynchronize();
 
@@ -206,7 +345,7 @@ void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels
             d_centroids,
             d_labels,
             total_pixels,
-            k);
+            k, channels);
 
     cudaDeviceSynchronize();
 
