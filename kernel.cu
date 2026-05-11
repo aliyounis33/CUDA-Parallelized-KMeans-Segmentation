@@ -137,8 +137,25 @@ void runTiledKMeans(unsigned char* data, int width, int height, int channels, in
 // =====================================================================
 void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, int k) {
     std::cout << "Running Fuzzy C-Means on GPU..." << std::endl;
-    // TODO: Implement
+    
+    // Create FCMClustering instance
+    // Defaults: m=2.0f, soft_clustering=true
+    FCMClustering fcm(data, width, height, channels, k, 2.0f, true);
+    
+    // Run the algorithm
+    FCMResult result = fcm.run();
+
+    // Copy the resulting segmented image data back to the original data pointer
+    int numPixels = width * height;
+    for (int p = 0; p < numPixels; p++) {
+        int idx = p * channels;
+        data[idx + 0] = result.image_data[p * 3 + 0];
+        if (channels > 1) data[idx + 1] = result.image_data[p * 3 + 1];
+        if (channels > 2) data[idx + 2] = result.image_data[p * 3 + 2];
+        // If there's an alpha channel, we leave it untouched.
+    }
 }
+
 
 // =====================================================================
 // 4. PARALLEL K-MEANS++ 
