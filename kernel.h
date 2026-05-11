@@ -1,5 +1,7 @@
 #ifndef KERNEL_H
 #define KERNEL_H
+#define BATCH_SIZE 1024
+#define MAX_ITERS 50
 
 // 1. Basic K-Means
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU);
