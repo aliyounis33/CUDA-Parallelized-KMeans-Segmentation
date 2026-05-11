@@ -141,7 +141,7 @@ void MainWindow::setupUI() {
     btnLoad->setObjectName("ghost");
 
     comboMethod = new QComboBox();
-    comboMethod->addItems({"Basic K-Means", "Tiled K-Means", "Fuzzy C-Means", "Parallel K-Means++", "Mini-Batch K-Means"});
+    comboMethod->addItems({"Basic K-Means", "Tiled K-Means", "Fuzzy C-Means", "Parallel K-Means++", "Mini-Batch K-Means", "Naive Lloyd", "Shared Memory Lloyd"});
 
     spinK = new QSpinBox();
     spinK->setRange(2, 32);
@@ -373,6 +373,8 @@ void MainWindow::runSegmentation(bool useGPU) {
         case 2: runFuzzyCMeans(ptr, w, h, 3, k); break;
         case 3: runKMeansPlusPlus(ptr, w, h, 3, k); break;
         case 4: runMiniBatchKMeans(ptr, w, h, 3, k); break;
+        case 5: runNaiveLloyd(ptr, w, h, 3, k); break;
+        case 6: runSharedLloyd(ptr, w, h, 3, k); break;
         default: QMessageBox::warning(this, "Error", "Method not implemented."); return;
     }
 }

@@ -483,3 +483,358 @@ void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels
     
 
 }
+
+// =====================================================================
+// 6. NAIVE LLOYD ALGORITHM (Global Memory)
+// =====================================================================
+
+__global__ void naiveLloydKernel(
+    unsigned char* image,
+    float* centroids,
+    int* labels,
+    int total_pixels,
+    int k,
+    int channels)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= total_pixels)
+        return;
+
+    int rgbOffset = idx * channels;
+
+    float r = image[rgbOffset];
+    float g = image[rgbOffset + 1];
+    float b = image[rgbOffset + 2];
+
+    // Find nearest centroid (reading from GLOBAL memory)
+    float minDist = 1e20f;
+    int bestCluster = 0;
+
+    for (int c = 0; c < k; c++)
+    {
+        float cr = centroids[c * channels];
+        float cg = centroids[c * channels + 1];
+        float cb = centroids[c * channels + 2];
+
+        float dist =
+            (r - cr) * (r - cr) +
+            (g - cg) * (g - cg) +
+            (b - cb) * (b - cb);
+
+        if (dist < minDist)
+        {
+            minDist = dist;
+            bestCluster = c;
+        }
+    }
+
+    labels[idx] = bestCluster;
+}
+
+void runNaiveLloyd(unsigned char* data, int width, int height, int channels, int k) {
+    std::cout << "Running Naive Lloyd Algorithm on GPU..." << std::endl;
+    srand(time(NULL));
+
+    int total_pixels = width * height;
+
+    // Initialize centroids randomly
+    float* h_centroids = new float[k * channels];
+
+    for (int c = 0; c < k; c++)
+    {
+        int rand_pixel = rand() % total_pixels;
+        h_centroids[c * channels] = data[rand_pixel * channels];
+        h_centroids[c * channels + 1] = data[rand_pixel * channels + 1];
+        h_centroids[c * channels + 2] = data[rand_pixel * channels + 2];
+    }
+
+    int* h_labels = (int*)malloc(total_pixels * sizeof(int));
+
+    unsigned char* d_image;
+    float* d_centroids;
+    int* d_labels;
+
+    cudaMalloc(&d_image, total_pixels * channels * sizeof(unsigned char));
+    cudaMalloc(&d_centroids, k * channels * sizeof(float));
+    cudaMalloc(&d_labels, total_pixels * sizeof(int));
+
+    cudaMemcpy(d_image, data, total_pixels * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
+
+    int threadsPerBlock = 256;
+    int blocks = (total_pixels + threadsPerBlock - 1) / threadsPerBlock;
+
+    // Lloyd Algorithm iterations
+    for (int iter = 0; iter < MAX_KMEANS_ITERS; iter++)
+    {
+        naiveLloydKernel<<<blocks, threadsPerBlock>>>(
+            d_image,
+            d_centroids,
+            d_labels,
+            total_pixels,
+            k,
+            channels);
+
+        cudaDeviceSynchronize();
+
+        // Copy labels back for centroid recalculation
+        cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+
+        // Recalculate centroids on CPU
+        vector<float> sumR(k, 0.0f);
+        vector<float> sumG(k, 0.0f);
+        vector<float> sumB(k, 0.0f);
+        vector<int> counts(k, 0);
+
+        for (int p = 0; p < total_pixels; p++)
+        {
+            int cluster = h_labels[p];
+            sumR[cluster] += data[p * channels];
+            sumG[cluster] += data[p * channels + 1];
+            sumB[cluster] += data[p * channels + 2];
+            counts[cluster]++;
+        }
+
+        bool changed = false;
+        for (int c = 0; c < k; c++)
+        {
+            if (counts[c] > 0)
+            {
+                float newR = sumR[c] / counts[c];
+                float newG = sumG[c] / counts[c];
+                float newB = sumB[c] / counts[c];
+
+                if (abs(newR - h_centroids[c * channels]) > 0.5f ||
+                    abs(newG - h_centroids[c * channels + 1]) > 0.5f ||
+                    abs(newB - h_centroids[c * channels + 2]) > 0.5f)
+                {
+                    changed = true;
+                }
+
+                h_centroids[c * channels] = newR;
+                h_centroids[c * channels + 1] = newG;
+                h_centroids[c * channels + 2] = newB;
+            }
+        }
+
+        cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
+
+        cout << "Iteration " << iter << " completed (changed: " << changed << ")" << endl;
+
+        if (!changed) break;
+    }
+
+    // Final assignment and image reconstruction
+    naiveLloydKernel<<<blocks, threadsPerBlock>>>(
+        d_image,
+        d_centroids,
+        d_labels,
+        total_pixels,
+        k,
+        channels);
+
+    cudaDeviceSynchronize();
+    cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+
+    for (int p = 0; p < total_pixels; p++)
+    {
+        int cluster = h_labels[p];
+        data[p * channels] = (unsigned char)h_centroids[cluster * channels];
+        data[p * channels + 1] = (unsigned char)h_centroids[cluster * channels + 1];
+        data[p * channels + 2] = (unsigned char)h_centroids[cluster * channels + 2];
+    }
+
+    free(h_labels);
+    delete[] h_centroids;
+
+    cudaFree(d_image);
+    cudaFree(d_centroids);
+    cudaFree(d_labels);
+
+    cout << "Naive Lloyd Algorithm completed!" << endl;
+}
+
+// =====================================================================
+// 7. SHARED MEMORY LLOYD ALGORITHM
+// =====================================================================
+
+__global__ void sharedLloydKernel(
+    unsigned char* image,
+    float* centroids,
+    int* labels,
+    int total_pixels,
+    int k,
+    int channels)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid = threadIdx.x;
+
+    // Dynamically allocated shared memory for centroids
+    extern __shared__ float shared_centroids[];
+
+    // Load centroids into shared memory (first k*channels threads)
+    for (int i = tid; i < k * channels; i += blockDim.x)
+    {
+        shared_centroids[i] = centroids[i];
+    }
+
+    __syncthreads();
+
+    if (idx >= total_pixels)
+        return;
+
+    int rgbOffset = idx * channels;
+
+    float r = image[rgbOffset];
+    float g = image[rgbOffset + 1];
+    float b = image[rgbOffset + 2];
+
+    // Find nearest centroid (reading from SHARED memory - much faster!)
+    float minDist = 1e20f;
+    int bestCluster = 0;
+
+    for (int c = 0; c < k; c++)
+    {
+        float cr = shared_centroids[c * channels];
+        float cg = shared_centroids[c * channels + 1];
+        float cb = shared_centroids[c * channels + 2];
+
+        float dist =
+            (r - cr) * (r - cr) +
+            (g - cg) * (g - cg) +
+            (b - cb) * (b - cb);
+
+        if (dist < minDist)
+        {
+            minDist = dist;
+            bestCluster = c;
+        }
+    }
+
+    labels[idx] = bestCluster;
+}
+
+void runSharedLloyd(unsigned char* data, int width, int height, int channels, int k) {
+    std::cout << "Running Shared Memory Lloyd Algorithm on GPU..." << std::endl;
+    srand(time(NULL));
+
+    int total_pixels = width * height;
+
+    // Initialize centroids randomly
+    float* h_centroids = new float[k * channels];
+
+    for (int c = 0; c < k; c++)
+    {
+        int rand_pixel = rand() % total_pixels;
+        h_centroids[c * channels] = data[rand_pixel * channels];
+        h_centroids[c * channels + 1] = data[rand_pixel * channels + 1];
+        h_centroids[c * channels + 2] = data[rand_pixel * channels + 2];
+    }
+
+    int* h_labels = (int*)malloc(total_pixels * sizeof(int));
+
+    unsigned char* d_image;
+    float* d_centroids;
+    int* d_labels;
+
+    cudaMalloc(&d_image, total_pixels * channels * sizeof(unsigned char));
+    cudaMalloc(&d_centroids, k * channels * sizeof(float));
+    cudaMalloc(&d_labels, total_pixels * sizeof(int));
+
+    cudaMemcpy(d_image, data, total_pixels * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
+
+    int threadsPerBlock = 256;
+    int blocks = (total_pixels + threadsPerBlock - 1) / threadsPerBlock;
+    int shared_mem_size = k * channels * sizeof(float);
+
+    // Lloyd Algorithm iterations with shared memory
+    for (int iter = 0; iter < MAX_KMEANS_ITERS; iter++)
+    {
+        sharedLloydKernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
+            d_image,
+            d_centroids,
+            d_labels,
+            total_pixels,
+            k,
+            channels);
+
+        cudaDeviceSynchronize();
+
+        // Copy labels back for centroid recalculation
+        cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+
+        // Recalculate centroids on CPU
+        vector<float> sumR(k, 0.0f);
+        vector<float> sumG(k, 0.0f);
+        vector<float> sumB(k, 0.0f);
+        vector<int> counts(k, 0);
+
+        for (int p = 0; p < total_pixels; p++)
+        {
+            int cluster = h_labels[p];
+            sumR[cluster] += data[p * channels];
+            sumG[cluster] += data[p * channels + 1];
+            sumB[cluster] += data[p * channels + 2];
+            counts[cluster]++;
+        }
+
+        bool changed = false;
+        for (int c = 0; c < k; c++)
+        {
+            if (counts[c] > 0)
+            {
+                float newR = sumR[c] / counts[c];
+                float newG = sumG[c] / counts[c];
+                float newB = sumB[c] / counts[c];
+
+                if (abs(newR - h_centroids[c * channels]) > 0.5f ||
+                    abs(newG - h_centroids[c * channels + 1]) > 0.5f ||
+                    abs(newB - h_centroids[c * channels + 2]) > 0.5f)
+                {
+                    changed = true;
+                }
+
+                h_centroids[c * channels] = newR;
+                h_centroids[c * channels + 1] = newG;
+                h_centroids[c * channels + 2] = newB;
+            }
+        }
+
+        cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
+
+        cout << "Iteration " << iter << " completed (changed: " << changed << ")" << endl;
+
+        if (!changed) break;
+    }
+
+    // Final assignment and image reconstruction
+    sharedLloydKernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
+        d_image,
+        d_centroids,
+        d_labels,
+        total_pixels,
+        k,
+        channels);
+
+    cudaDeviceSynchronize();
+    cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+
+    for (int p = 0; p < total_pixels; p++)
+    {
+        int cluster = h_labels[p];
+        data[p * channels] = (unsigned char)h_centroids[cluster * channels];
+        data[p * channels + 1] = (unsigned char)h_centroids[cluster * channels + 1];
+        data[p * channels + 2] = (unsigned char)h_centroids[cluster * channels + 2];
+    }
+
+    free(h_labels);
+    delete[] h_centroids;
+
+    cudaFree(d_image);
+    cudaFree(d_centroids);
+    cudaFree(d_labels);
+
+    cout << "Shared Memory Lloyd Algorithm completed!" << endl;
+}
