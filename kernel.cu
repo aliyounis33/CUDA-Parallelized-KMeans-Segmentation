@@ -3,41 +3,120 @@
 #include <iostream>
 #include <vector>
 #include <ctime>
+#include <cmath>
+#include <cstring>
+#include <algorithm>
+
+using namespace std;
 
 // =====================================================================
 // 1. BASIC K-MEANS
 // =====================================================================
-__global__ void basicDummyKernel(unsigned char* data, int numPixels) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < numPixels) {
-        data[idx * 3] = 255; // Dummy GPU operation: Paint it red
-    }
-}
 
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
     int numPixels = width * height;
     int dataSize = numPixels * channels * sizeof(unsigned char);
 
-    if (useGPU) {
-        std::cout << "Running Basic K-Means on GPU..." << std::endl;
-        unsigned char* d_data;
-        cudaMalloc((void**)&d_data, dataSize);
-        cudaMemcpy(d_data, data, dataSize, cudaMemcpyHostToDevice);
+    cout << "Running Basic K-Means on CPU (Lloyd Algorithm)..." << endl;
+    
+    // ===== HELPER FUNCTION =====
+    auto getSquaredDistance = [](const unsigned char* pixel, const Centroid& c) {
+        float dr = pixel[0] - c.r;
+        float dg = pixel[1] - c.g;
+        float db = pixel[2] - c.b;
+        return dr * dr + dg * dg + db * db;
+    };
+    
+    // ===== SEQUENTIAL LLOYD ALGORITHM =====
+    vector<int> labels(numPixels, 0);
+    
+    // Initialize centroids by randomly selecting K pixels
+    vector<Centroid> centroids(k);
+    srand(time(nullptr));
+    
+    for (int i = 0; i < k; i++) {
+        int randomIdx = rand() % numPixels;
+        int pixelOffset = randomIdx * channels;
+        centroids[i].r = data[pixelOffset];
+        centroids[i].g = data[pixelOffset + 1];
+        centroids[i].b = data[pixelOffset + 2];
+    }
+    
+    // Accumulators for centroid recalculation
+    vector<float> sumR(k, 0.0f);
+    vector<float> sumG(k, 0.0f);
+    vector<float> sumB(k, 0.0f);
+    vector<int> counts(k, 0);
+    
+    bool changed = true;
+    int iter = 0;
+    
+    cout << "Total pixels: " << numPixels << ", K: " << k << endl;
+    
+    // Main algorithm loop
+    while (changed && iter < MAX_KMEANS_ITERS) {
+        changed = false;
         
-        int threads = 256;
-        int blocks = (numPixels + threads - 1) / threads;
-        basicDummyKernel<<<blocks, threads>>>(d_data, numPixels);
+        // Reset accumulators
+        fill(sumR.begin(), sumR.end(), 0.0f);
+        fill(sumG.begin(), sumG.end(), 0.0f);
+        fill(sumB.begin(), sumB.end(), 0.0f);
+        fill(counts.begin(), counts.end(), 0);
         
-        cudaDeviceSynchronize();
-        cudaMemcpy(data, d_data, dataSize, cudaMemcpyDeviceToHost);
-        cudaFree(d_data);
-    } else {
-        std::cout << "Running Basic K-Means on CPU..." << std::endl;
-        for (int i = 0; i < numPixels; ++i) {
-            data[i * channels + 1] = 255; // Dummy CPU operation: Paint it green
+        // Step 1: Assign each pixel to the nearest centroid
+        for (int p = 0; p < numPixels; p++) {
+            unsigned char* pixel = &data[p * channels];
+            
+            float minDist = 1e18f;
+            int bestCluster = 0;
+            
+            // Find closest centroid
+            for (int c = 0; c < k; c++) {
+                float dist = getSquaredDistance(pixel, centroids[c]);
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestCluster = c;
+                }
+            }
+            
+            // Check if assignment changed
+            if (labels[p] != bestCluster) {
+                changed = true;
+                labels[p] = bestCluster;
+            }
+            
+            // Accumulate pixel values for centroid recalculation
+            sumR[bestCluster] += pixel[0];
+            sumG[bestCluster] += pixel[1];
+            sumB[bestCluster] += pixel[2];
+            counts[bestCluster]++;
         }
+        
+        // Step 2: Recalculate centroids
+        for (int c = 0; c < k; c++) {
+            if (counts[c] > 0) {
+                centroids[c].r = sumR[c] / counts[c];
+                centroids[c].g = sumG[c] / counts[c];
+                centroids[c].b = sumB[c] / counts[c];
+            }
+        }
+        
+        iter++;
+        cout << "Iteration " << iter << " completed (changed: " << changed << ")" << endl;
+    }
+    
+    cout << "K-Means converged in " << iter << " iterations." << endl;
+    
+    // Reconstruct the image with centroid colors
+    for (int p = 0; p < numPixels; p++) {
+        int clusterIdx = labels[p];
+        int pixelOffset = p * channels;
+        data[pixelOffset] = static_cast<unsigned char>(centroids[clusterIdx].r);
+        data[pixelOffset + 1] = static_cast<unsigned char>(centroids[clusterIdx].g);
+        data[pixelOffset + 2] = static_cast<unsigned char>(centroids[clusterIdx].b);
     }
 }
+// }
 
 // =====================================================================
 // 2. TILED K-MEANS 

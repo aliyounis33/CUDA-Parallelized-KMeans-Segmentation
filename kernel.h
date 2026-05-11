@@ -1,7 +1,14 @@
 #ifndef KERNEL_H
 #define KERNEL_H
+#include <vector>
+
 #define BATCH_SIZE 1024
 #define MAX_ITERS 50
+#define MAX_KMEANS_ITERS 100
+
+struct Centroid {
+    float r, g, b; // RGB components
+};
 
 // 1. Basic K-Means
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU);
