@@ -160,13 +160,6 @@ void MainWindow::setupUI() {
     controlLayout->addWidget(btnRunCPU, 3, 0);
     controlLayout->addWidget(btnRunGPU, 3, 1);
 
-    QGroupBox *workflowGroup = new QGroupBox("Workflow Figure");
-    QVBoxLayout *workflowLayout = new QVBoxLayout(workflowGroup);
-    lblWorkflow = new QLabel();
-    lblWorkflow->setAlignment(Qt::AlignCenter);
-    lblWorkflow->setPixmap(createWorkflowFigure());
-    workflowLayout->addWidget(lblWorkflow);
-
     QGroupBox *perfGroup = new QGroupBox("Performance Dashboard");
     QVBoxLayout *perfLayout = new QVBoxLayout(perfGroup);
     tblStats = new QTableWidget(5, 2);
@@ -199,7 +192,6 @@ void MainWindow::setupUI() {
     perfLayout->addWidget(lblChart);
 
     leftLayout->addWidget(controlGroup);
-    leftLayout->addWidget(workflowGroup);
     leftLayout->addWidget(perfGroup);
     leftLayout->addStretch();
 
@@ -320,45 +312,6 @@ QPixmap MainWindow::createPerformanceChart(int cpuMs, int gpuMs) {
     return pix;
 }
 
-QPixmap MainWindow::createWorkflowFigure() {
-    QPixmap pix(360, 140);
-    pix.fill(Qt::transparent);
-
-    QPainter painter(&pix);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.fillRect(pix.rect(), QColor("#ffffff"));
-
-    QStringList steps = {"Load", "Segment", "Compare", "Export"};
-    QList<QColor> colors = {QColor("#6fa8ff"), QColor("#fbbf24"), QColor("#23c58e"), QColor("#a78bfa")};
-    int startX = 20;
-    int y = 40;
-    int w = 70;
-    int h = 40;
-    int gap = 20;
-
-    painter.setPen(Qt::NoPen);
-    for (int i = 0; i < steps.size(); ++i) {
-        QRect rect(startX + i * (w + gap), y, w, h);
-        painter.setBrush(colors[i]);
-        painter.drawRoundedRect(rect, 8, 8);
-        painter.setPen(QColor("#1f2937"));
-        painter.drawText(rect, Qt::AlignCenter, steps[i]);
-        painter.setPen(Qt::NoPen);
-        if (i < steps.size() - 1) {
-            int arrowX = rect.right() + 6;
-            int arrowY = rect.center().y();
-            QPolygon arrow;
-            arrow << QPoint(arrowX, arrowY - 6) << QPoint(arrowX + 10, arrowY) << QPoint(arrowX, arrowY + 6);
-            painter.setBrush(QColor("#9aa4b2"));
-            painter.drawPolygon(arrow);
-        }
-    }
-
-    painter.setPen(QColor("#5b6475"));
-    painter.drawText(QRect(12, 8, 320, 20), Qt::AlignLeft, "Segmentation pipeline overview");
-
-    return pix;
-}
 
 void MainWindow::connectSignals() {
     // Route button clicks to their respective class methods
@@ -413,15 +366,21 @@ void MainWindow::runSegmentation(bool useGPU) {
     timer.start();
     
     // 3. Dispatch to Algorithm
+    if(useGPU){
     switch (methodIndex) {
         case 0: runBasicKMeans(ptr, w, h, 3, k, useGPU); break;
-        case 1: runTiledKMeans(ptr, w, h, 3, k, useGPU); break;
-        case 2: runFuzzyCMeans(ptr, w, h, 3, k, useGPU); break;
-        case 3: runKMeansPlusPlus(ptr, w, h, 3, k, useGPU); break;
-        case 4: runMiniBatchKMeans(ptr, w, h, 3, k, useGPU); break;
+        case 1: runTiledKMeans(ptr, w, h, 3, k); break;
+        case 2: runFuzzyCMeans(ptr, w, h, 3, k); break;
+        case 3: runKMeansPlusPlus(ptr, w, h, 3, k); break;
+        case 4: runMiniBatchKMeans(ptr, w, h, 3, k); break;
         default: QMessageBox::warning(this, "Error", "Method not implemented."); return;
     }
-    
+}
+    else{
+
+        runBasicKMeans(ptr, w, h, 3, k, useGPU);
+
+    }
     // 4. Update UI
     int elapsedMs = static_cast<int>(timer.elapsed());
     QString timeText = QString("Time: %1 ms").arg(elapsedMs);

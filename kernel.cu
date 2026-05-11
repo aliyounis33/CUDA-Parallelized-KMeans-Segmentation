@@ -14,10 +14,15 @@ using namespace std;
 // =====================================================================
 
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
+    if (useGPU){
+        cout << "Running Basic K-Means on GPU" << endl;
+    }
+
+    else{
     int numPixels = width * height;
     int dataSize = numPixels * channels * sizeof(unsigned char);
 
-    cout << "Running Basic K-Means on CPU (Lloyd Algorithm)..." << endl;
+    cout << "Running Basic K-Means on CPU" << endl;
     
     // ===== HELPER FUNCTION =====
     auto getSquaredDistance = [](const unsigned char* pixel, const Centroid& c) {
@@ -116,32 +121,30 @@ void runBasicKMeans(unsigned char* data, int width, int height, int channels, in
         data[pixelOffset + 2] = static_cast<unsigned char>(centroids[clusterIdx].b);
     }
 }
+}
 // }
 
 // =====================================================================
 // 2. TILED K-MEANS 
 // =====================================================================
-void runTiledKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
-    if (useGPU) std::cout << "Running Tiled K-Means on GPU..." << std::endl;
-    else        std::cout << "Running Tiled K-Means on CPU..." << std::endl;
+void runTiledKMeans(unsigned char* data, int width, int height, int channels, int k) {
+    std::cout << "Running Tiled K-Means on GPU..." << std::endl;
     // TODO: Implement
 }
 
 // =====================================================================
 // 3. FUZZY C-MEANS 
 // =====================================================================
-void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
-    if (useGPU) std::cout << "Running Fuzzy C-Means on GPU..." << std::endl;
-    else        std::cout << "Running Fuzzy C-Means on CPU..." << std::endl;
+void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, int k) {
+    std::cout << "Running Fuzzy C-Means on GPU..." << std::endl;
     // TODO: Implement
 }
 
 // =====================================================================
 // 4. PARALLEL K-MEANS++ 
 // =====================================================================
-void runKMeansPlusPlus(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
-    if (useGPU) std::cout << "Running Parallel K-Means++ on GPU..." << std::endl;
-    else        std::cout << "Running Parallel K-Means++ on CPU..." << std::endl;
+void runKMeansPlusPlus(unsigned char* data, int width, int height, int channels, int k) {
+    std::cout << "Running Parallel K-Means++ on GPU..." << std::endl;
     // TODO: Implement
 }
 
@@ -287,8 +290,7 @@ void generateMiniBatch(
 }
 
 
-void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
-    if (useGPU) {
+void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels, int k) {
     std::cout << "Running Mini-Batch K-Means on GPU..." << std::endl;
     srand(time(NULL));
 
@@ -478,10 +480,6 @@ void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels
     cudaFree(d_counts);
     cudaFree(d_labels);
     cudaFree(d_batch_indices);
-    }
+    
 
-    else {       
-    std::cout << "Running Mini-Batch K-Means on CPU..." << std::endl;
-    // TODO: Implement
-    }
 }
