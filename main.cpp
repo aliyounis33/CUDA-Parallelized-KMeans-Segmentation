@@ -108,7 +108,7 @@ void MainWindow::setupUI() {
     QVBoxLayout *headerTextLayout = new QVBoxLayout();
     QLabel *title = new QLabel("CUDA K-Means Segmentation Profiler");
     title->setObjectName("title");
-    QLabel *subtitle = new QLabel("Compare CPU vs GPU segmentation with live previews and performance analytics.");
+    QLabel *subtitle = new QLabel("Compare CPU vs GPU segmentation performance.");
     subtitle->setObjectName("subtitle");
     headerTextLayout->addWidget(title);
     headerTextLayout->addWidget(subtitle);
@@ -162,7 +162,7 @@ void MainWindow::setupUI() {
 
     QGroupBox *perfGroup = new QGroupBox("Performance Dashboard");
     QVBoxLayout *perfLayout = new QVBoxLayout(perfGroup);
-    tblStats = new QTableWidget(5, 2);
+    tblStats = new QTableWidget(4, 2);
     tblStats->setHorizontalHeaderLabels({"Metric", "Value"});
     tblStats->verticalHeader()->setVisible(false);
     tblStats->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -172,15 +172,13 @@ void MainWindow::setupUI() {
     tblStats->setRowHeight(1, 26);
     tblStats->setRowHeight(2, 26);
     tblStats->setRowHeight(3, 26);
-    tblStats->setRowHeight(4, 26);
 
-    tblStats->setItem(0, 0, new QTableWidgetItem("CPU time"));
-    tblStats->setItem(1, 0, new QTableWidgetItem("GPU time"));
-    tblStats->setItem(2, 0, new QTableWidgetItem("Speedup"));
-    tblStats->setItem(3, 0, new QTableWidgetItem("Image size"));
-    tblStats->setItem(4, 0, new QTableWidgetItem("Method"));
+    tblStats->setItem(0, 0, new QTableWidgetItem("GPU time"));
+    tblStats->setItem(1, 0, new QTableWidgetItem("Speedup"));
+    tblStats->setItem(2, 0, new QTableWidgetItem("Image size"));
+    tblStats->setItem(3, 0, new QTableWidgetItem("Method"));
 
-    for (int row = 0; row < 5; ++row) {
+    for (int row = 0; row < 4; ++row) {
         tblStats->setItem(row, 1, new QTableWidgetItem("--"));
     }
 
@@ -404,8 +402,7 @@ void MainWindow::resetPerformanceUI() {
     tblStats->item(0, 1)->setText("--");
     tblStats->item(1, 1)->setText("--");
     tblStats->item(2, 1)->setText("--");
-    tblStats->item(3, 1)->setText("--");
-    tblStats->item(4, 1)->setText(comboMethod->currentText());
+    tblStats->item(3, 1)->setText(comboMethod->currentText());
     lblChart->setPixmap(createPerformanceChart(lastCpuMs, lastGpuMs));
 }
 
@@ -416,25 +413,22 @@ void MainWindow::updatePerformanceUI(bool useGPU, int elapsedMs) {
         lastCpuMs = elapsedMs;
     }
 
-    if (lastCpuMs > 0) {
-        tblStats->item(0, 1)->setText(QString("%1 ms").arg(lastCpuMs));
-    }
     if (lastGpuMs > 0) {
-        tblStats->item(1, 1)->setText(QString("%1 ms").arg(lastGpuMs));
+        tblStats->item(0, 1)->setText(QString("%1 ms").arg(lastGpuMs));
     }
 
     if (lastCpuMs > 0 && lastGpuMs > 0) {
         double speedup = static_cast<double>(lastCpuMs) / static_cast<double>(lastGpuMs);
-        tblStats->item(2, 1)->setText(QString("%1x").arg(speedup, 0, 'f', 2));
+        tblStats->item(1, 1)->setText(QString("%1x").arg(speedup, 0, 'f', 2));
     } else {
-        tblStats->item(2, 1)->setText("--");
+        tblStats->item(1, 1)->setText("--");
     }
 
     if (!lastImageSize.isEmpty()) {
-        tblStats->item(3, 1)->setText(QString("%1 x %2").arg(lastImageSize.width()).arg(lastImageSize.height()));
+        tblStats->item(2, 1)->setText(QString("%1 x %2").arg(lastImageSize.width()).arg(lastImageSize.height()));
     }
 
-    tblStats->item(4, 1)->setText(comboMethod->currentText());
+    tblStats->item(3, 1)->setText(comboMethod->currentText());
     lblChart->setPixmap(createPerformanceChart(lastCpuMs, lastGpuMs));
     lblStatus->setText(useGPU ? "GPU run complete" : "CPU run complete");
 }
