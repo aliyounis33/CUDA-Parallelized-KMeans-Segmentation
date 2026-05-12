@@ -19,16 +19,7 @@ void runTiledKMeans(unsigned char* data, int width, int height, int channels, in
 // 3. Fuzzy C-Means
 void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, int k);
 
-// 4. Parallel K-Means++
-void runKMeansPlusPlus(unsigned char* data, int width, int height, int channels, int k);
-
-// 5. Mini-Batch K-Means
+// 4. Mini-Batch K-Means
 void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels, int k);
-
-// 6. Naive Lloyd Algorithm (Global Memory)
-void runNaiveLloyd(unsigned char* data, int width, int height, int channels, int k);
-
-// 7. Shared Memory Lloyd Algorithm
-void runSharedLloyd(unsigned char* data, int width, int height, int channels, int k);
 
 #endif
