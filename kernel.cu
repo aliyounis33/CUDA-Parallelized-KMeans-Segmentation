@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
-
+#include "FCM_clustering.cu"
 using namespace std;
 
 // =====================================================================
@@ -15,7 +15,7 @@ using namespace std;
 
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU) {
     if (useGPU){
-        cout << "Running Basic K-Means on GPU" << endl;
+        runNaiveLloyd(data, width, height, channels, k);
     }
 
     else{
@@ -128,8 +128,7 @@ void runBasicKMeans(unsigned char* data, int width, int height, int channels, in
 // 2. TILED K-MEANS 
 // =====================================================================
 void runTiledKMeans(unsigned char* data, int width, int height, int channels, int k) {
-    std::cout << "Running Tiled K-Means on GPU..." << std::endl;
-    // TODO: Implement
+    runSharedLloyd(data, width, height, channels, k);
 }
 
 // =====================================================================
@@ -158,15 +157,7 @@ void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, in
 
 
 // =====================================================================
-// 4. PARALLEL K-MEANS++ 
-// =====================================================================
-void runKMeansPlusPlus(unsigned char* data, int width, int height, int channels, int k) {
-    std::cout << "Running Parallel K-Means++ on GPU..." << std::endl;
-    // TODO: Implement
-}
-
-// =====================================================================
-// 5. MINI-BATCH K-MEANS 
+// 4. MINI-BATCH K-MEANS 
 // =====================================================================
 __global__ void miniBatchKmeansKernel(
     unsigned char* image,
