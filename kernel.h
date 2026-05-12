@@ -12,14 +12,18 @@ struct Centroid {
 
 // 1. Basic K-Means
 void runBasicKMeans(unsigned char* data, int width, int height, int channels, int k, bool useGPU);
+void runNaiveLloyd(unsigned char* data, int width, int height, int channels, int k);
 
 // 2. Tiled K-Means
 void runTiledKMeans(unsigned char* data, int width, int height, int channels, int k);
+void runSharedLloyd(unsigned char* data, int width, int height, int channels, int k);
 
 // 3. Fuzzy C-Means
 void runFuzzyCMeans(unsigned char* data, int width, int height, int channels, int k);
 
 // 4. Mini-Batch K-Means
 void runMiniBatchKMeans(unsigned char* data, int width, int height, int channels, int k);
+
+
 
 #endif
