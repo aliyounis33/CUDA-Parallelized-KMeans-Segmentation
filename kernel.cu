@@ -656,13 +656,25 @@ void runNaiveLloyd(unsigned char* data, int width, int height, int channels, int
 }
 
 // =====================================================================
-// 7. SHARED MEMORY LLOYD ALGORITHM
+// 7. OPTIMIZED LLOYD ALGORITHM (Fused Kernels + Minimal GPU-CPU Transfers)
+// =====================================================================
+// PURPOSE: GPU-persistent K-means with three fused kernels to minimize
+//          CPU-GPU data transfers and maximize GPU utilization
+//
+// OPTIMIZATION STRATEGY:
+//   - Kernel 1: Fused assignment + partial reduction using shared memory
+//   - Kernel 2: Global reduction combining partial results from all blocks
+//   - Kernel 3: GPU-side centroid update (avoids CPU computation)
 // =====================================================================
 
-__global__ void sharedLloydKernel(
+__global__ void kmeans_fused_kernel(
     unsigned char* image,
     float* centroids,
     int* labels,
+    float* partial_sums_r,
+    float* partial_sums_g,
+    float* partial_sums_b,
+    int* partial_counts,
     int total_pixels,
     int k,
     int channels)
@@ -670,70 +682,137 @@ __global__ void sharedLloydKernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int tid = threadIdx.x;
 
-    // Dynamically allocated shared memory for centroids
-    extern __shared__ float shared_centroids[];
+    // Allocate shared memory for this block's accumulation
+    extern __shared__ char shared_mem[];
+    float* shared_sums_r = (float*)shared_mem;
+    float* shared_sums_g = (float*)(shared_mem + k * sizeof(float) * blockDim.x);
+    float* shared_sums_b = (float*)(shared_mem + 2 * k * sizeof(float) * blockDim.x);
+    int* shared_counts = (int*)(shared_mem + 3 * k * sizeof(float) * blockDim.x);
 
-    // Load centroids into shared memory (first k*channels threads)
-    for (int i = tid; i < k * channels; i += blockDim.x)
+    // Initialize shared memory (all threads participate)
+    for (int i = tid; i < k; i += blockDim.x)
     {
-        shared_centroids[i] = centroids[i];
+        shared_sums_r[i] = 0.0f;
+        shared_sums_g[i] = 0.0f;
+        shared_sums_b[i] = 0.0f;
+        shared_counts[i] = 0;
     }
-
     __syncthreads();
 
-    if (idx >= total_pixels)
-        return;
-
-    int rgbOffset = idx * channels;
-
-    float r = image[rgbOffset];
-    float g = image[rgbOffset + 1];
-    float b = image[rgbOffset + 2];
-
-    // Find nearest centroid (reading from SHARED memory - much faster!)
-    float minDist = 1e20f;
-    int bestCluster = 0;
-
-    for (int c = 0; c < k; c++)
+    // PHASE 1: Assignment + Local Accumulation
+    if (idx < total_pixels)
     {
-        float cr = shared_centroids[c * channels];
-        float cg = shared_centroids[c * channels + 1];
-        float cb = shared_centroids[c * channels + 2];
+        int rgbOffset = idx * channels;
+        float r = image[rgbOffset];
+        float g = image[rgbOffset + 1];
+        float b = image[rgbOffset + 2];
 
-        float dist =
-            (r - cr) * (r - cr) +
-            (g - cg) * (g - cg) +
-            (b - cb) * (b - cb);
+        // Find closest centroid
+        float minDist = 1e20f;
+        int bestCluster = 0;
 
-        if (dist < minDist)
+        for (int c = 0; c < k; c++)
         {
-            minDist = dist;
-            bestCluster = c;
-        }
-    }
+            float cr = centroids[c * channels];
+            float cg = centroids[c * channels + 1];
+            float cb = centroids[c * channels + 2];
 
-    labels[idx] = bestCluster;
+            float dist =
+                (r - cr) * (r - cr) +
+                (g - cg) * (g - cg) +
+                (b - cb) * (b - cb);
+
+            if (dist < minDist)
+            {
+                minDist = dist;
+                bestCluster = c;
+            }
+        }
+
+        // Store assignment
+        labels[idx] = bestCluster;
+
+        // Atomically accumulate to shared memory
+        atomicAdd(&shared_sums_r[bestCluster], r);
+        atomicAdd(&shared_sums_g[bestCluster], g);
+        atomicAdd(&shared_sums_b[bestCluster], b);
+        atomicAdd(&shared_counts[bestCluster], 1);
+    }
+    __syncthreads();
+
+    // PHASE 2: Write block-local results to global memory (partial results)
+    for (int i = tid; i < k; i += blockDim.x)
+    {
+        partial_sums_r[blockIdx.x * k + i] = shared_sums_r[i];
+        partial_sums_g[blockIdx.x * k + i] = shared_sums_g[i];
+        partial_sums_b[blockIdx.x * k + i] = shared_sums_b[i];
+        partial_counts[blockIdx.x * k + i] = shared_counts[i];
+    }
 }
 
-void runSharedLloyd(unsigned char* data, int width, int height, int channels, int k) {
-    std::cout << "Running Shared Memory Lloyd Algorithm on GPU..." << std::endl;
+__global__ void kmeans_reduce_kernel(
+    float* partial_sums_r,
+    float* partial_sums_g,
+    float* partial_sums_b,
+    int* partial_counts,
+    float* final_sums_r,
+    float* final_sums_g,
+    float* final_sums_b,
+    int* final_counts,
+    int k,
+    int num_blocks)
+{
+    int i = blockIdx.x;
+    if (i >= k) return;
+
+    float sum_r = 0.0f;
+    float sum_g = 0.0f;
+    float sum_b = 0.0f;
+    int count_val = 0;
+
+    // Sum across all blocks for this cluster
+    for (int b = 0; b < num_blocks; b++)
+    {
+        sum_r += partial_sums_r[b * k + i];
+        sum_g += partial_sums_g[b * k + i];
+        sum_b += partial_sums_b[b * k + i];
+        count_val += partial_counts[b * k + i];
+    }
+
+    // Store final aggregated results
+    final_sums_r[i] = sum_r;
+    final_sums_g[i] = sum_g;
+    final_sums_b[i] = sum_b;
+    final_counts[i] = count_val;
+}
+
+__global__ void kmeans_update_centroids_kernel(
+    float* final_sums_r,
+    float* final_sums_g,
+    float* final_sums_b,
+    int* final_counts,
+    float* centroids,
+    int k,
+    int channels)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < k && final_counts[i] > 0)
+    {
+        // Update centroid as mean of all assigned pixels
+        centroids[i * channels] = final_sums_r[i] / (float)final_counts[i];
+        centroids[i * channels + 1] = final_sums_g[i] / (float)final_counts[i];
+        centroids[i * channels + 2] = final_sums_b[i] / (float)final_counts[i];
+    }
+}
+
+void runSharedLloyd(unsigned char* data, int width, int height, int channels, int k)
+{
+    std::cout << "Running Optimized Lloyd Algorithm (Fused Kernels + GPU-Persistent) on GPU..." << std::endl;
     srand(time(NULL));
 
     int total_pixels = width * height;
 
-    // Initialize centroids randomly
-    float* h_centroids = new float[k * channels];
-
-    for (int c = 0; c < k; c++)
-    {
-        int rand_pixel = rand() % total_pixels;
-        h_centroids[c * channels] = data[rand_pixel * channels];
-        h_centroids[c * channels + 1] = data[rand_pixel * channels + 1];
-        h_centroids[c * channels + 2] = data[rand_pixel * channels + 2];
-    }
-
-    int* h_labels = (int*)malloc(total_pixels * sizeof(int));
-
+    // ===== GPU MEMORY ALLOCATION =====
     unsigned char* d_image;
     float* d_centroids;
     int* d_labels;
@@ -742,85 +821,111 @@ void runSharedLloyd(unsigned char* data, int width, int height, int channels, in
     cudaMalloc(&d_centroids, k * channels * sizeof(float));
     cudaMalloc(&d_labels, total_pixels * sizeof(int));
 
+    // Copy image to GPU once (stays there for all iterations)
     cudaMemcpy(d_image, data, total_pixels * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
+
+    // Initialize centroids randomly on host
+    float* h_centroids = new float[k * channels];
+    for (int c = 0; c < k; c++)
+    {
+        int rand_pixel = rand() % total_pixels;
+        h_centroids[c * channels] = data[rand_pixel * channels];
+        h_centroids[c * channels + 1] = data[rand_pixel * channels + 1];
+        h_centroids[c * channels + 2] = data[rand_pixel * channels + 2];
+    }
     cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
 
+    // ===== INTERMEDIATE BUFFERS FOR REDUCTION =====
     int threadsPerBlock = 256;
     int blocks = (total_pixels + threadsPerBlock - 1) / threadsPerBlock;
-    int shared_mem_size = k * channels * sizeof(float);
 
-    // Lloyd Algorithm iterations with shared memory
+    float* d_partial_sums_r;
+    float* d_partial_sums_g;
+    float* d_partial_sums_b;
+    int* d_partial_counts;
+
+    cudaMalloc(&d_partial_sums_r, blocks * k * sizeof(float));
+    cudaMalloc(&d_partial_sums_g, blocks * k * sizeof(float));
+    cudaMalloc(&d_partial_sums_b, blocks * k * sizeof(float));
+    cudaMalloc(&d_partial_counts, blocks * k * sizeof(int));
+
+    // Final aggregated buffers
+    float* d_final_sums_r;
+    float* d_final_sums_g;
+    float* d_final_sums_b;
+    int* d_final_counts;
+
+    cudaMalloc(&d_final_sums_r, k * sizeof(float));
+    cudaMalloc(&d_final_sums_g, k * sizeof(float));
+    cudaMalloc(&d_final_sums_b, k * sizeof(float));
+    cudaMalloc(&d_final_counts, k * sizeof(int));
+
+    // Shared memory size for Kernel 1
+    size_t shared_mem_size = k * 3 * sizeof(float) * threadsPerBlock + k * sizeof(int);
+
+    // ===== LLOYD ITERATIONS (GPU-PERSISTENT) =====
+    int* h_labels = (int*)malloc(total_pixels * sizeof(int));
+
     for (int iter = 0; iter < MAX_KMEANS_ITERS; iter++)
     {
-        sharedLloydKernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
+        // KERNEL 1: Fused Assignment + Partial Reduction
+        kmeans_fused_kernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
             d_image,
             d_centroids,
             d_labels,
+            d_partial_sums_r,
+            d_partial_sums_g,
+            d_partial_sums_b,
+            d_partial_counts,
             total_pixels,
             k,
             channels);
-
         cudaDeviceSynchronize();
 
-        // Copy labels back for centroid recalculation
-        cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+        // KERNEL 2: Global Reduction
+        kmeans_reduce_kernel<<<k, 1>>>(
+            d_partial_sums_r,
+            d_partial_sums_g,
+            d_partial_sums_b,
+            d_partial_counts,
+            d_final_sums_r,
+            d_final_sums_g,
+            d_final_sums_b,
+            d_final_counts,
+            k,
+            blocks);
+        cudaDeviceSynchronize();
 
-        // Recalculate centroids on CPU
-        vector<float> sumR(k, 0.0f);
-        vector<float> sumG(k, 0.0f);
-        vector<float> sumB(k, 0.0f);
-        vector<int> counts(k, 0);
+        // KERNEL 3: Update Centroids on GPU
+        kmeans_update_centroids_kernel<<<(k + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock>>>(
+            d_final_sums_r,
+            d_final_sums_g,
+            d_final_sums_b,
+            d_final_counts,
+            d_centroids,
+            k,
+            channels);
+        cudaDeviceSynchronize();
 
-        for (int p = 0; p < total_pixels; p++)
-        {
-            int cluster = h_labels[p];
-            sumR[cluster] += data[p * channels];
-            sumG[cluster] += data[p * channels + 1];
-            sumB[cluster] += data[p * channels + 2];
-            counts[cluster]++;
-        }
-
-        bool changed = false;
-        for (int c = 0; c < k; c++)
-        {
-            if (counts[c] > 0)
-            {
-                float newR = sumR[c] / counts[c];
-                float newG = sumG[c] / counts[c];
-                float newB = sumB[c] / counts[c];
-
-                if (abs(newR - h_centroids[c * channels]) > 0.5f ||
-                    abs(newG - h_centroids[c * channels + 1]) > 0.5f ||
-                    abs(newB - h_centroids[c * channels + 2]) > 0.5f)
-                {
-                    changed = true;
-                }
-
-                h_centroids[c * channels] = newR;
-                h_centroids[c * channels + 1] = newG;
-                h_centroids[c * channels + 2] = newB;
-            }
-        }
-
-        cudaMemcpy(d_centroids, h_centroids, k * channels * sizeof(float), cudaMemcpyHostToDevice);
-
-        cout << "Iteration " << iter << " completed (changed: " << changed << ")" << endl;
-
-        if (!changed) break;
+        cout << "Iteration " << iter << " completed" << endl;
     }
 
-    // Final assignment and image reconstruction
-    sharedLloydKernel<<<blocks, threadsPerBlock, shared_mem_size>>>(
+    // ===== FINAL ASSIGNMENT =====
+    // One final pass to assign all pixels to nearest centroid
+    naiveLloydKernel<<<blocks, threadsPerBlock>>>(
         d_image,
         d_centroids,
         d_labels,
         total_pixels,
         k,
         channels);
-
     cudaDeviceSynchronize();
-    cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
 
+    // ===== COPY RESULTS BACK (ONLY ONCE) =====
+    cudaMemcpy(h_labels, d_labels, total_pixels * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_centroids, d_centroids, k * channels * sizeof(float), cudaMemcpyDeviceToHost);
+
+    // ===== IMAGE RECONSTRUCTION =====
     for (int p = 0; p < total_pixels; p++)
     {
         int cluster = h_labels[p];
@@ -829,12 +934,21 @@ void runSharedLloyd(unsigned char* data, int width, int height, int channels, in
         data[p * channels + 2] = (unsigned char)h_centroids[cluster * channels + 2];
     }
 
+    // ===== CLEANUP =====
     free(h_labels);
     delete[] h_centroids;
 
     cudaFree(d_image);
     cudaFree(d_centroids);
     cudaFree(d_labels);
+    cudaFree(d_partial_sums_r);
+    cudaFree(d_partial_sums_g);
+    cudaFree(d_partial_sums_b);
+    cudaFree(d_partial_counts);
+    cudaFree(d_final_sums_r);
+    cudaFree(d_final_sums_g);
+    cudaFree(d_final_sums_b);
+    cudaFree(d_final_counts);
 
-    cout << "Shared Memory Lloyd Algorithm completed!" << endl;
+    cout << "Optimized Lloyd Algorithm completed!" << endl;
 }
