@@ -23,6 +23,10 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QMessageBox>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QEasingCurve>
+#include <QTimer>
 #include "kernel.h"
 
 // =====================================================================
@@ -45,6 +49,8 @@ private:
     QLabel *lblWorkflow;
     QTableWidget *tblStats;
 
+    QVector<QPropertyAnimation*> introAnimations;
+
     // --- State Variables ---
     QImage originalImage;
     int lastCpuMs = -1;
@@ -63,6 +69,7 @@ private:
     QPixmap createWorkflowFigure();
     void updatePerformanceUI(bool useGPU, int elapsedMs);
     void resetPerformanceUI();
+    void applyIntroAnimation(QWidget* widget, int delayMs);
 };
 
 // =====================================================================
@@ -79,24 +86,37 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
 void MainWindow::setupUI() {
     QWidget *centralWidget = new QWidget(this);
+    centralWidget->setObjectName("root");
     QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
-    mainLayout->setSpacing(16);
+    mainLayout->setSpacing(18);
     mainLayout->setContentsMargins(20, 20, 20, 20);
 
     centralWidget->setStyleSheet(
-        "QWidget { background-color: #f4f6f9; color: #1d2433; font-family: 'Segoe UI', 'Arial'; }"
-        "QGroupBox { border: 1px solid #d7dce5; border-radius: 10px; margin-top: 12px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 2px 6px; color: #1d2433; font-weight: 600; }"
-        "QFrame#card { background: #ffffff; border: 1px solid #e1e6ef; border-radius: 12px; }"
-        "QPushButton { background: #0f62fe; color: #ffffff; border: none; border-radius: 8px; padding: 8px 14px; font-weight: 600; }"
-        "QPushButton:disabled { background: #a9b5d1; }"
-        "QPushButton#ghost { background: #e8eefc; color: #0f62fe; border: 1px solid #c6d4fb; }"
-        "QComboBox, QSpinBox { background: #ffffff; border: 1px solid #cfd6e6; border-radius: 6px; padding: 6px 8px; }"
-        "QLabel#title { font-size: 22px; font-weight: 700; }"
-        "QLabel#subtitle { color: #5b6475; }"
-        "QLabel#badge { background: #e7f5ff; color: #0a4c7d; border-radius: 8px; padding: 4px 8px; font-weight: 600; }"
-        "QTableWidget { background: #ffffff; border: 1px solid #e1e6ef; border-radius: 8px; gridline-color: #eef1f6; }"
-        "QHeaderView::section { background: #f1f4f9; padding: 6px; border: none; font-weight: 600; }"
+        "QWidget#root { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fef7ef, stop:0.45 #f2f7ff, stop:1 #eefbf6);"
+        " color: #172131; font-family: 'Space Grotesk', 'Barlow', 'Tahoma'; }"
+        "QGroupBox { background: #ffffff; border: 1px solid #e2e7f1; border-radius: 14px; margin-top: 14px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 16px; padding: 2px 8px; color: #1b2536; font-weight: 700; letter-spacing: 0.2px; }"
+        "QFrame#card { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #f6f8fb);"
+        " border: 1px solid #e2e7f1; border-radius: 16px; }"
+        "QPushButton { border: none; border-radius: 10px; padding: 9px 16px; font-weight: 700; letter-spacing: 0.3px; }"
+        "QPushButton#primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0ea5a8, stop:1 #14b8a6); color: #ffffff; }"
+        "QPushButton#primary:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #14b8a6, stop:1 #2dd4bf); }"
+        "QPushButton#primary:pressed { background: #0f766e; }"
+        "QPushButton#primaryAlt { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f59e0b, stop:1 #f97316); color: #ffffff; }"
+        "QPushButton#primaryAlt:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #fbbf24, stop:1 #fb923c); }"
+        "QPushButton#primaryAlt:pressed { background: #c2410c; }"
+        "QPushButton#secondary { background: #f1f5ff; color: #1d4ed8; border: 1px solid #c7d2fe; }"
+        "QPushButton#secondary:hover { background: #e0e7ff; }"
+        "QPushButton:disabled { background: #c6cfde; color: #f8fafc; }"
+        "QComboBox, QSpinBox { background: #ffffff; border: 1px solid #cad4e5; border-radius: 8px; padding: 7px 10px; color: #1f2937; }"
+        "QComboBox QAbstractItemView { background: #ffffff; color: #1f2937; selection-background-color: #e0f2fe; selection-color: #0f172a; }"
+        "QLabel { color: #1f2937; }"
+        "QLabel#title { font-size: 24px; font-weight: 800; letter-spacing: 0.4px; }"
+        "QLabel#subtitle { color: #5b6475; font-size: 13px; }"
+        "QLabel#badge { background: #e6fffb; color: #0f766e; border-radius: 999px; padding: 5px 12px; font-weight: 700; }"
+        "QTableWidget { background: #ffffff; border: 1px solid #e2e7f1; border-radius: 10px; gridline-color: #eef1f6; }"
+        "QTableWidget::item { padding: 6px; color: #1f2937; }"
+        "QHeaderView::section { background: #f2f5fb; padding: 7px; border: none; font-weight: 700; color: #1f2a3a; }"
     );
 
     // --- 1. Header ---
@@ -133,12 +153,13 @@ void MainWindow::setupUI() {
     leftLayout->setContentsMargins(0, 0, 0, 0);
 
     QGroupBox *controlGroup = new QGroupBox("Controls");
+    controlGroup->setObjectName("panel");
     QGridLayout *controlLayout = new QGridLayout(controlGroup);
     controlLayout->setHorizontalSpacing(10);
     controlLayout->setVerticalSpacing(10);
 
     btnLoad = new QPushButton("Load Image");
-    btnLoad->setObjectName("ghost");
+    btnLoad->setObjectName("secondary");
 
     comboMethod = new QComboBox();
     comboMethod->addItems({"Basic K-Means", "Tiled K-Means", "Fuzzy C-Means", "Mini-Batch K-Means"});
@@ -149,6 +170,8 @@ void MainWindow::setupUI() {
 
     btnRunCPU = new QPushButton("Run on CPU");
     btnRunGPU = new QPushButton("Run on GPU");
+    btnRunCPU->setObjectName("primary");
+    btnRunGPU->setObjectName("primaryAlt");
     btnRunCPU->setEnabled(false);
     btnRunGPU->setEnabled(false);
 
@@ -161,8 +184,10 @@ void MainWindow::setupUI() {
     controlLayout->addWidget(btnRunGPU, 3, 1);
 
     QGroupBox *perfGroup = new QGroupBox("Performance Dashboard");
+    perfGroup->setObjectName("panel");
     QVBoxLayout *perfLayout = new QVBoxLayout(perfGroup);
     tblStats = new QTableWidget(4, 2);
+    tblStats->setObjectName("stats");
     tblStats->setHorizontalHeaderLabels({"Metric", "Value"});
     tblStats->verticalHeader()->setVisible(false);
     tblStats->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -229,25 +254,30 @@ void MainWindow::setupUI() {
 
     mainLayout->addWidget(splitter);
     setCentralWidget(centralWidget);
+
+    applyIntroAnimation(header, 0);
+    applyIntroAnimation(controlGroup, 90);
+    applyIntroAnimation(perfGroup, 160);
+    applyIntroAnimation(imageCard, 120);
 }
 
 void MainWindow::createImageCard(QVBoxLayout* layout, QLabel*& imgLbl, QLabel*& timeLbl, const QString& title, const QString& subtitle) {
     QLabel* titleLbl = new QLabel(title);
     titleLbl->setAlignment(Qt::AlignCenter);
-    titleLbl->setStyleSheet("font-weight: 700; font-size: 15px;");
+    titleLbl->setStyleSheet("font-weight: 800; font-size: 15px; color: #1f2937;");
 
     QLabel* subLbl = new QLabel(subtitle);
     subLbl->setAlignment(Qt::AlignCenter);
-    subLbl->setStyleSheet("color: #6b7280; font-size: 12px;");
+    subLbl->setStyleSheet("color: #64748b; font-size: 12px;");
 
     imgLbl = new QLabel("Load an image to preview segmentation");
     imgLbl->setAlignment(Qt::AlignCenter);
     imgLbl->setMinimumSize(320, 260);
-    imgLbl->setStyleSheet("border: 2px dashed #c8d0de; background-color: #f8fafc; color: #4b5563; font-size: 13px;");
+    imgLbl->setStyleSheet("border: 2px dashed #c7d2fe; background-color: #f8fafc; color: #475569; font-size: 13px; border-radius: 12px;");
 
     timeLbl = new QLabel("Time: -- ms");
     timeLbl->setAlignment(Qt::AlignCenter);
-    timeLbl->setStyleSheet("font-weight: 600; font-size: 13px; color: #0f62fe; background-color: transparent;");
+    timeLbl->setStyleSheet("font-weight: 700; font-size: 13px; color: #0f766e; background-color: transparent;");
 
     layout->addWidget(titleLbl);
     layout->addWidget(subLbl);
@@ -256,7 +286,7 @@ void MainWindow::createImageCard(QVBoxLayout* layout, QLabel*& imgLbl, QLabel*& 
 }
 
 QPixmap MainWindow::createPerformanceChart(int cpuMs, int gpuMs) {
-    QPixmap pix(360, 160);
+    QPixmap pix(360, 170);
     pix.fill(Qt::transparent);
 
     QPainter painter(&pix);
@@ -264,11 +294,11 @@ QPixmap MainWindow::createPerformanceChart(int cpuMs, int gpuMs) {
 
     QLinearGradient bg(0, 0, 0, pix.height());
     bg.setColorAt(0.0, QColor("#ffffff"));
-    bg.setColorAt(1.0, QColor("#f4f7fb"));
+    bg.setColorAt(1.0, QColor("#f3f6fb"));
     painter.fillRect(pix.rect(), bg);
 
-    painter.setPen(QPen(QColor("#e1e6ef"), 1));
-    for (int y = 30; y <= 130; y += 25) {
+    painter.setPen(QPen(QColor("#e6ecf4"), 1));
+    for (int y = 32; y <= 140; y += 27) {
         painter.drawLine(40, y, 330, y);
     }
 
@@ -278,24 +308,24 @@ QPixmap MainWindow::createPerformanceChart(int cpuMs, int gpuMs) {
 
     auto barHeight = [&](int value) {
         if (value <= 0) return 10;
-        return static_cast<int>(90.0 * value / maxValue) + 10;
+        return static_cast<int>(92.0 * value / maxValue) + 10;
     };
 
     int cpuHeight = barHeight(cpuMs);
     int gpuHeight = barHeight(gpuMs);
 
-    QRect cpuBar(90, 130 - cpuHeight, 70, cpuHeight);
-    QRect gpuBar(200, 130 - gpuHeight, 70, gpuHeight);
+    QRect cpuBar(90, 140 - cpuHeight, 70, cpuHeight);
+    QRect gpuBar(200, 140 - gpuHeight, 70, gpuHeight);
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor("#6fa8ff"));
+    painter.setBrush(QColor("#f59e0b"));
     painter.drawRoundedRect(cpuBar, 6, 6);
-    painter.setBrush(QColor("#23c58e"));
+    painter.setBrush(QColor("#14b8a6"));
     painter.drawRoundedRect(gpuBar, 6, 6);
 
     painter.setPen(QColor("#3b4252"));
-    painter.drawText(QRect(80, 135, 90, 20), Qt::AlignCenter, "CPU");
-    painter.drawText(QRect(190, 135, 90, 20), Qt::AlignCenter, "GPU");
+    painter.drawText(QRect(80, 145, 90, 20), Qt::AlignCenter, "CPU");
+    painter.drawText(QRect(190, 145, 90, 20), Qt::AlignCenter, "GPU");
 
     painter.setPen(QColor("#5b6475"));
     painter.drawText(QRect(10, 8, 180, 18), Qt::AlignLeft, "Runtime (ms)");
@@ -308,6 +338,23 @@ QPixmap MainWindow::createPerformanceChart(int cpuMs, int gpuMs) {
     }
 
     return pix;
+}
+
+void MainWindow::applyIntroAnimation(QWidget* widget, int delayMs) {
+    if (!widget) return;
+
+    auto *effect = new QGraphicsOpacityEffect(widget);
+    effect->setOpacity(0.0);
+    widget->setGraphicsEffect(effect);
+
+    auto *anim = new QPropertyAnimation(effect, "opacity", this);
+    anim->setStartValue(0.0);
+    anim->setEndValue(1.0);
+    anim->setDuration(520);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    introAnimations.append(anim);
+
+    QTimer::singleShot(delayMs, anim, [anim]() { anim->start(); });
 }
 
 
